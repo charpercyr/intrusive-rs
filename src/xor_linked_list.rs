@@ -17,7 +17,7 @@ use core::ptr::NonNull;
 use core::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::link_ops::{self, DefaultLinkOps};
-use crate::pointer_ops::PointerOps;
+use crate::pointer_ops::{ExclusivePointer, PointerOps};
 use crate::singly_linked_list::SinglyLinkedListOps;
 use crate::unchecked_option::UncheckedOptionExt;
 use crate::Adapter;
@@ -1328,6 +1328,21 @@ where
         }
     }
 
+    /// Gets an iterator over the objects in the `XorLinkedList`.
+    #[inline]
+    pub fn iter_mut(&mut self) -> IterMut<'_, A>
+    where
+        <A::PointerOps as PointerOps>::Pointer: ExclusivePointer,
+    {
+        IterMut {
+            prev_head: None,
+            head: self.head,
+            tail: self.tail,
+            next_tail: None,
+            list: self,
+        }
+    }
+
     /// Removes all elements from the `XorLinkedList`.
     ///
     /// This will unlink all object currently in the list, which requires
@@ -1474,6 +1489,20 @@ where
     }
 }
 
+impl<'a, A: Adapter + 'a> IntoIterator for &'a mut XorLinkedList<A>
+where
+    A::LinkOps: XorLinkedListOps,
+    <A::PointerOps as PointerOps>::Pointer: ExclusivePointer,
+{
+    type Item = &'a mut <A::PointerOps as PointerOps>::Value;
+    type IntoIter = IterMut<'a, A>;
+
+    #[inline]
+    fn into_iter(self) -> IterMut<'a, A> {
+        self.iter_mut()
+    }
+}
+
 impl<A: Adapter + Default> Default for XorLinkedList<A>
 where
     A::LinkOps: XorLinkedListOps,
@@ -1565,6 +1594,73 @@ where
             next_tail: self.next_tail,
             list: self.list,
         }
+    }
+}
+
+// =============================================================================
+// IterMut
+// =============================================================================
+
+/// An iterator over references to the items of a `XorLinkedList`.
+pub struct IterMut<'a, A: Adapter>
+where
+    A::LinkOps: XorLinkedListOps,
+    <A::PointerOps as PointerOps>::Pointer: ExclusivePointer,
+{
+    prev_head: Option<<A::LinkOps as link_ops::LinkOps>::LinkPtr>,
+    head: Option<<A::LinkOps as link_ops::LinkOps>::LinkPtr>,
+    tail: Option<<A::LinkOps as link_ops::LinkOps>::LinkPtr>,
+    next_tail: Option<<A::LinkOps as link_ops::LinkOps>::LinkPtr>,
+    list: &'a mut XorLinkedList<A>,
+}
+impl<'a, A: Adapter + 'a> Iterator for IterMut<'a, A>
+where
+    A::LinkOps: XorLinkedListOps,
+    <A::PointerOps as PointerOps>::Pointer: ExclusivePointer,
+{
+    type Item = &'a mut <A::PointerOps as PointerOps>::Value;
+
+    #[inline]
+    fn next(&mut self) -> Option<&'a mut <A::PointerOps as PointerOps>::Value> {
+        let head = self.head?;
+
+        if Some(head) == self.tail {
+            self.prev_head = None;
+            self.head = None;
+            self.next_tail = None;
+            self.tail = None;
+        } else {
+            let next = unsafe { self.list.adapter.link_ops().next(head, self.prev_head) };
+            self.prev_head = self.head;
+            self.head = next;
+        }
+        Some(unsafe {
+            &mut *(self.list.adapter.get_value(head) as *mut <A::PointerOps as PointerOps>::Value)
+        })
+    }
+}
+impl<'a, A: Adapter + 'a> DoubleEndedIterator for IterMut<'a, A>
+where
+    A::LinkOps: XorLinkedListOps,
+    <A::PointerOps as PointerOps>::Pointer: ExclusivePointer,
+{
+    #[inline]
+    fn next_back(&mut self) -> Option<&'a mut <A::PointerOps as PointerOps>::Value> {
+        let tail = self.tail?;
+
+        if Some(tail) == self.head {
+            self.prev_head = None;
+            self.head = None;
+            self.next_tail = None;
+            self.tail = None;
+        } else {
+            let new_tail = unsafe { self.list.adapter.link_ops().prev(tail, self.next_tail) };
+            self.next_tail = self.tail;
+            self.tail = new_tail;
+        }
+        Some(unsafe {
+            &mut *(self.list.adapter.get_value(tail) as *mut <A::PointerOps as PointerOps>::Value)
+        })
     }
 }
 

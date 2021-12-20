@@ -265,11 +265,11 @@ where
     holder.pointer.deref().clone()
 }
 
-
-/// Marker trait that allows exclusive access to values from intrusive data structures
-/// 
+/// Marker trait that allows exclusive access to values from intrusive data structures.
+/// This means that a conversion from `*const PointerOps::Value` to `*mut PointerOps::Value` is valid if `PointerOps::Pointer` implements `ExclusivePointer`.
+///
 /// # Safety
-/// This trait is only safe to implement if the pointer type has exclusive access to the value that it is pointing to.
+/// This trait is only safe to implement if the pointer type has exclusive access to the value that it is pointing to (e.g. `&mut T` or `Box<T>`).
 pub unsafe trait ExclusivePointer {}
 
 unsafe impl<'a, T: ?Sized> ExclusivePointer for &'a mut T {}

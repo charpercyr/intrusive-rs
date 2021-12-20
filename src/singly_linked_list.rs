@@ -14,7 +14,7 @@ use core::ptr::{null_mut, NonNull};
 use core::sync::atomic::{AtomicPtr, Ordering};
 
 use crate::link_ops::{self, DefaultLinkOps};
-use crate::pointer_ops::PointerOps;
+use crate::pointer_ops::{ExclusivePointer, PointerOps};
 use crate::xor_linked_list::XorLinkedListOps;
 use crate::Adapter;
 
@@ -615,6 +615,22 @@ where
         Some(unsafe { &*self.list.adapter.get_value(self.current?) })
     }
 
+    /// Returns a mutable reference to the object that the cursor is currently
+    /// pointing to.
+    ///
+    /// This returns None if the cursor is currently pointing to the null
+    /// object.
+    #[inline]
+    pub fn get_mut(&mut self) -> Option<&mut <A::PointerOps as PointerOps>::Value>
+    where
+        <A::PointerOps as PointerOps>::Pointer: ExclusivePointer,
+    {
+        Some(unsafe {
+            &mut *(self.list.adapter.get_value(self.current?)
+                as *mut <A::PointerOps as PointerOps>::Value)
+        })
+    }
+
     /// Returns a read-only cursor pointing to the current element.
     ///
     /// The lifetime of the returned `Cursor` is bound to that of the
@@ -975,6 +991,18 @@ where
         }
     }
 
+    /// Gets an iterator over the objects in the `SinglyLinkedList`.
+    #[inline]
+    pub fn iter_mut(&mut self) -> IterMut<'_, A>
+    where
+        <A::PointerOps as PointerOps>::Pointer: ExclusivePointer,
+    {
+        IterMut {
+            current: self.head,
+            list: self,
+        }
+    }
+
     /// Removes all elements from the `SinglyLinkedList`.
     ///
     /// This will unlink all object currently in the list, which requires
@@ -1093,6 +1121,20 @@ where
     }
 }
 
+impl<'a, A: Adapter + 'a> IntoIterator for &'a mut SinglyLinkedList<A>
+where
+    A::LinkOps: SinglyLinkedListOps,
+    <A::PointerOps as PointerOps>::Pointer: ExclusivePointer,
+{
+    type Item = &'a mut <A::PointerOps as PointerOps>::Value;
+    type IntoIter = IterMut<'a, A>;
+
+    #[inline]
+    fn into_iter(self) -> IterMut<'a, A> {
+        self.iter_mut()
+    }
+}
+
 impl<A: Adapter + Default> Default for SinglyLinkedList<A>
 where
     A::LinkOps: SinglyLinkedListOps,
@@ -1148,6 +1190,38 @@ where
             current: self.current,
             list: self.list,
         }
+    }
+}
+
+// =============================================================================
+// IterMut
+// =============================================================================
+
+/// An iterator over references to the items of a `SinglyLinkedList`.
+pub struct IterMut<'a, A: Adapter>
+where
+    A::LinkOps: SinglyLinkedListOps,
+    <A::PointerOps as PointerOps>::Pointer: ExclusivePointer,
+{
+    current: Option<<A::LinkOps as link_ops::LinkOps>::LinkPtr>,
+    list: &'a mut SinglyLinkedList<A>,
+}
+impl<'a, A: Adapter + 'a> Iterator for IterMut<'a, A>
+where
+    A::LinkOps: SinglyLinkedListOps,
+    <A::PointerOps as PointerOps>::Pointer: ExclusivePointer,
+{
+    type Item = &'a mut <A::PointerOps as PointerOps>::Value;
+
+    #[inline]
+    fn next(&mut self) -> Option<&'a mut <A::PointerOps as PointerOps>::Value> {
+        let current = self.current?;
+
+        self.current = unsafe { self.list.adapter.link_ops().next(current) };
+        Some(unsafe {
+            &mut *(self.list.adapter.get_value(current)
+                as *mut <A::PointerOps as PointerOps>::Value)
+        })
     }
 }
 
