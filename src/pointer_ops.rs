@@ -265,6 +265,18 @@ where
     holder.pointer.deref().clone()
 }
 
+
+/// Marker trait that allows exclusive access to values from intrusive data structures
+/// 
+/// # Safety
+/// This trait is only safe to implement if the pointer type has exclusive access to the value that it is pointing to.
+pub unsafe trait ExclusivePointer {}
+
+unsafe impl<'a, T: ?Sized> ExclusivePointer for &'a mut T {}
+
+#[cfg(feature = "alloc")]
+unsafe impl<T: ?Sized> ExclusivePointer for Box<T> {}
+
 #[cfg(test)]
 mod tests {
     use super::{DefaultPointerOps, PointerOps};
