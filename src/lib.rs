@@ -295,7 +295,7 @@ pub use crate::link_ops::{DefaultLinkOps, LinkOps};
 pub use crate::linked_list::AtomicLink as LinkedListAtomicLink;
 pub use crate::linked_list::Link as LinkedListLink;
 pub use crate::linked_list::LinkedList;
-pub use crate::pointer_ops::{DefaultPointerOps, PointerOps};
+pub use crate::pointer_ops::{DefaultPointerOps, ExclusivePointer, PointerOps};
 pub use crate::rbtree::AtomicLink as RBTreeAtomicLink;
 pub use crate::rbtree::Link as RBTreeLink;
 pub use crate::rbtree::RBTree;
