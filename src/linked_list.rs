@@ -730,18 +730,22 @@ where
     ///
     /// This returns None if the cursor is currently pointing to the null
     /// object, or if the object cannot be uniquely accessed.
+    ///
+    /// # Safety
+    ///
+    /// You must not modify any links that are linked
     #[inline]
-    pub fn try_get_mut(&mut self) -> Option<&mut <A::PointerOps as PointerOps>::Value>
+    pub unsafe fn try_get_mut(&mut self) -> Option<&mut <A::PointerOps as PointerOps>::Value>
     where
         A::PointerOps: TryExclusivePointerOps,
     {
-        Some(unsafe {
+        Some(
             &mut *self
                 .list
                 .adapter
                 .pointer_ops()
-                .try_get_mut(self.list.adapter.get_value(self.current?))?
-        })
+                .try_get_mut(self.list.adapter.get_value(self.current?))?,
+        )
     }
 
     /// Returns a mutable reference to the object that the cursor is currently
@@ -750,17 +754,17 @@ where
     /// This returns None if the cursor is currently pointing to the null
     /// object.
     #[inline]
-    pub fn get_mut(&mut self) -> Option<&mut <A::PointerOps as PointerOps>::Value>
+    pub unsafe fn get_mut(&mut self) -> Option<&mut <A::PointerOps as PointerOps>::Value>
     where
         A::PointerOps: ExclusivePointerOps,
     {
-        Some(unsafe {
+        Some(
             &mut *(self
                 .list
                 .adapter
                 .pointer_ops()
                 .get_mut(self.list.adapter.get_value(self.current?)))
-        })
+        )
     }
 
     /// Returns a read-only cursor pointing to the current element.
@@ -1260,8 +1264,12 @@ where
     }
 
     /// Gets a mutable iterator over the objects in the `LinkedList`.
+    ///
+    /// # Safety
+    ///
+    /// You must not modify any links that are linked
     #[inline]
-    pub fn iter_mut(&mut self) -> IterMut<'_, A>
+    pub unsafe fn iter_mut(&mut self) -> IterMut<'_, A>
     where
         A::PointerOps: ExclusivePointerOps,
     {
@@ -1405,20 +1413,6 @@ where
     #[inline]
     fn into_iter(self) -> Iter<'a, A> {
         self.iter()
-    }
-}
-
-impl<'a, A: Adapter + 'a> IntoIterator for &'a mut LinkedList<A>
-where
-    A::LinkOps: LinkedListOps,
-    A::PointerOps: ExclusivePointerOps,
-{
-    type Item = &'a mut <A::PointerOps as PointerOps>::Value;
-    type IntoIter = IterMut<'a, A>;
-
-    #[inline]
-    fn into_iter(self) -> IterMut<'a, A> {
-        self.iter_mut()
     }
 }
 
