@@ -295,14 +295,16 @@ pub use crate::link_ops::{DefaultLinkOps, LinkOps};
 pub use crate::linked_list::AtomicLink as LinkedListAtomicLink;
 pub use crate::linked_list::Link as LinkedListLink;
 pub use crate::linked_list::LinkedList;
-pub use crate::pointer_ops::{DefaultPointerOps, ExclusivePointer, PointerOps};
+pub use crate::pointer_ops::{
+    DefaultPointerOps, ExclusivePointerOps, PointerOps, TryExclusivePointerOps,
+};
 pub use crate::rbtree::AtomicLink as RBTreeAtomicLink;
 pub use crate::rbtree::Link as RBTreeLink;
 pub use crate::rbtree::RBTree;
 pub use crate::singly_linked_list::AtomicLink as SinglyLinkedListAtomicLink;
 pub use crate::singly_linked_list::Link as SinglyLinkedListLink;
 pub use crate::singly_linked_list::SinglyLinkedList;
-pub use crate::unsafe_ref::UnsafeRef;
+pub use crate::unsafe_ref::{UnsafeMut, UnsafeRef};
 pub use crate::xor_linked_list::AtomicLink as XorLinkedListAtomicLink;
 pub use crate::xor_linked_list::Link as XorLinkedListLink;
 pub use crate::xor_linked_list::XorLinkedList;

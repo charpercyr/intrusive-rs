@@ -17,10 +17,10 @@ use core::ptr::NonNull;
 use core::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::link_ops::{self, DefaultLinkOps};
-use crate::pointer_ops::{ExclusivePointer, PointerOps};
+use crate::pointer_ops::PointerOps;
 use crate::singly_linked_list::SinglyLinkedListOps;
 use crate::unchecked_option::UncheckedOptionExt;
-use crate::Adapter;
+use crate::{Adapter, ExclusivePointerOps, TryExclusivePointerOps};
 
 // =============================================================================
 // XorLinkedListOps
@@ -626,6 +626,44 @@ where
     #[inline]
     pub fn get(&self) -> Option<&<A::PointerOps as PointerOps>::Value> {
         Some(unsafe { &*self.list.adapter.get_value(self.current?) })
+    }
+
+    /// Returns a mutable reference to the object that the cursor is currently
+    /// pointing to.
+    ///
+    /// This returns None if the cursor is currently pointing to the null
+    /// object, or if the object cannot be uniquely accessed.
+    #[inline]
+    pub fn try_get_mut(&mut self) -> Option<&mut <A::PointerOps as PointerOps>::Value>
+    where
+        A::PointerOps: TryExclusivePointerOps,
+    {
+        Some(unsafe {
+            &mut *self
+                .list
+                .adapter
+                .pointer_ops()
+                .try_get_mut(self.list.adapter.get_value(self.current?))?
+        })
+    }
+
+    /// Returns a mutable reference to the object that the cursor is currently
+    /// pointing to.
+    ///
+    /// This returns None if the cursor is currently pointing to the null
+    /// object.
+    #[inline]
+    pub fn get_mut(&mut self) -> Option<&mut <A::PointerOps as PointerOps>::Value>
+    where
+        A::PointerOps: ExclusivePointerOps,
+    {
+        Some(unsafe {
+            &mut *(self
+                .list
+                .adapter
+                .pointer_ops()
+                .get_mut(self.list.adapter.get_value(self.current?)))
+        })
     }
 
     /// Returns a read-only cursor pointing to the current element.
@@ -1328,11 +1366,11 @@ where
         }
     }
 
-    /// Gets an iterator over the objects in the `XorLinkedList`.
+    /// Gets a mutable iterator over the objects in the `XorLinkedList`.
     #[inline]
     pub fn iter_mut(&mut self) -> IterMut<'_, A>
     where
-        <A::PointerOps as PointerOps>::Pointer: ExclusivePointer,
+        A::PointerOps: ExclusivePointerOps,
     {
         IterMut {
             prev_head: None,
@@ -1492,7 +1530,7 @@ where
 impl<'a, A: Adapter + 'a> IntoIterator for &'a mut XorLinkedList<A>
 where
     A::LinkOps: XorLinkedListOps,
-    <A::PointerOps as PointerOps>::Pointer: ExclusivePointer,
+    A::PointerOps: ExclusivePointerOps,
 {
     type Item = &'a mut <A::PointerOps as PointerOps>::Value;
     type IntoIter = IterMut<'a, A>;
@@ -1601,11 +1639,11 @@ where
 // IterMut
 // =============================================================================
 
-/// An iterator over references to the items of a `XorLinkedList`.
+/// An iterator over mutable references to the items of a `XorLinkedList`.
 pub struct IterMut<'a, A: Adapter>
 where
     A::LinkOps: XorLinkedListOps,
-    <A::PointerOps as PointerOps>::Pointer: ExclusivePointer,
+    A::PointerOps: ExclusivePointerOps,
 {
     prev_head: Option<<A::LinkOps as link_ops::LinkOps>::LinkPtr>,
     head: Option<<A::LinkOps as link_ops::LinkOps>::LinkPtr>,
@@ -1616,7 +1654,7 @@ where
 impl<'a, A: Adapter + 'a> Iterator for IterMut<'a, A>
 where
     A::LinkOps: XorLinkedListOps,
-    <A::PointerOps as PointerOps>::Pointer: ExclusivePointer,
+    A::PointerOps: ExclusivePointerOps,
 {
     type Item = &'a mut <A::PointerOps as PointerOps>::Value;
 
@@ -1635,14 +1673,18 @@ where
             self.head = next;
         }
         Some(unsafe {
-            &mut *(self.list.adapter.get_value(head) as *mut <A::PointerOps as PointerOps>::Value)
+            &mut *self
+                .list
+                .adapter
+                .pointer_ops()
+                .get_mut(self.list.adapter.get_value(head))
         })
     }
 }
 impl<'a, A: Adapter + 'a> DoubleEndedIterator for IterMut<'a, A>
 where
     A::LinkOps: XorLinkedListOps,
-    <A::PointerOps as PointerOps>::Pointer: ExclusivePointer,
+    A::PointerOps: ExclusivePointerOps,
 {
     #[inline]
     fn next_back(&mut self) -> Option<&'a mut <A::PointerOps as PointerOps>::Value> {
@@ -1659,7 +1701,11 @@ where
             self.tail = new_tail;
         }
         Some(unsafe {
-            &mut *(self.list.adapter.get_value(tail) as *mut <A::PointerOps as PointerOps>::Value)
+            &mut *self
+                .list
+                .adapter
+                .pointer_ops()
+                .get_mut(self.list.adapter.get_value(tail))
         })
     }
 }

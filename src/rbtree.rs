@@ -20,13 +20,14 @@ use crate::Bound::{self, Excluded, Included, Unbounded};
 
 use crate::link_ops::{self, DefaultLinkOps};
 use crate::linked_list::LinkedListOps;
-use crate::pointer_ops::ExclusivePointer;
 use crate::pointer_ops::PointerOps;
 use crate::singly_linked_list::SinglyLinkedListOps;
 use crate::unchecked_option::UncheckedOptionExt;
 use crate::xor_linked_list::XorLinkedListOps;
 use crate::Adapter;
+use crate::ExclusivePointerOps;
 use crate::KeyAdapter;
+use crate::TryExclusivePointerOps;
 
 // =============================================================================
 // RBTreeOps
@@ -1190,15 +1191,37 @@ where
     /// pointing to.
     ///
     /// This returns None if the cursor is currently pointing to the null
+    /// object, or if the object cannot be uniquely accessed.
+    #[inline]
+    pub fn try_get_mut(&mut self) -> Option<&mut <A::PointerOps as PointerOps>::Value>
+    where
+        A::PointerOps: TryExclusivePointerOps,
+    {
+        Some(unsafe {
+            &mut *self
+                .tree
+                .adapter
+                .pointer_ops()
+                .try_get_mut(self.tree.adapter.get_value(self.current?))?
+        })
+    }
+
+    /// Returns a mutable reference to the object that the cursor is currently
+    /// pointing to.
+    ///
+    /// This returns None if the cursor is currently pointing to the null
     /// object.
     #[inline]
     pub fn get_mut(&mut self) -> Option<&mut <A::PointerOps as PointerOps>::Value>
     where
-        <A::PointerOps as PointerOps>::Pointer: ExclusivePointer,
+        A::PointerOps: ExclusivePointerOps,
     {
         Some(unsafe {
-            &mut *(self.tree.adapter.get_value(self.current?)
-                as *mut <A::PointerOps as PointerOps>::Value)
+            &mut *(self
+                .tree
+                .adapter
+                .pointer_ops()
+                .get_mut(self.tree.adapter.get_value(self.current?)))
         })
     }
 
@@ -1647,11 +1670,11 @@ where
         }
     }
 
-    /// Gets an iterator over the objects in the `RBTree`.
+    /// Gets a mutable iterator over the objects in the `RBTree`.
     #[inline]
     pub fn iter_mut(&mut self) -> IterMut<'_, A>
     where
-        <A::PointerOps as PointerOps>::Pointer: ExclusivePointer,
+        A::PointerOps: ExclusivePointerOps,
     {
         let link_ops = self.adapter.link_ops();
 
@@ -2122,7 +2145,7 @@ where
 impl<'a, A: Adapter + 'a> IntoIterator for &'a mut RBTree<A>
 where
     A::LinkOps: RBTreeOps,
-    <A::PointerOps as PointerOps>::Pointer: ExclusivePointer,
+    A::PointerOps: ExclusivePointerOps,
 {
     type Item = &'a mut <A::PointerOps as PointerOps>::Value;
     type IntoIter = IterMut<'a, A>;
@@ -2319,11 +2342,11 @@ where
 // IterMut
 // =============================================================================
 
-/// An iterator over references to the items of a `RBTree`.
+/// An iterator over mutable references to the items of a `RBTree`.
 pub struct IterMut<'a, A: Adapter>
 where
     A::LinkOps: RBTreeOps,
-    <A::PointerOps as PointerOps>::Pointer: ExclusivePointer,
+    A::PointerOps: ExclusivePointerOps,
 {
     head: Option<<A::LinkOps as link_ops::LinkOps>::LinkPtr>,
     tail: Option<<A::LinkOps as link_ops::LinkOps>::LinkPtr>,
@@ -2332,7 +2355,7 @@ where
 impl<'a, A: Adapter + 'a> Iterator for IterMut<'a, A>
 where
     A::LinkOps: RBTreeOps,
-    <A::PointerOps as PointerOps>::Pointer: ExclusivePointer,
+    A::PointerOps: ExclusivePointerOps,
 {
     type Item = &'a mut <A::PointerOps as PointerOps>::Value;
 
@@ -2347,14 +2370,18 @@ where
             self.head = unsafe { next(self.tree.adapter.link_ops(), head) };
         }
         Some(unsafe {
-            &mut *(self.tree.adapter.get_value(head) as *mut <A::PointerOps as PointerOps>::Value)
+            &mut *self
+                .tree
+                .adapter
+                .pointer_ops()
+                .get_mut(self.tree.adapter.get_value(head))
         })
     }
 }
 impl<'a, A: Adapter + 'a> DoubleEndedIterator for IterMut<'a, A>
 where
     A::LinkOps: RBTreeOps,
-    <A::PointerOps as PointerOps>::Pointer: ExclusivePointer,
+    A::PointerOps: ExclusivePointerOps,
 {
     #[inline]
     fn next_back(&mut self) -> Option<&'a mut <A::PointerOps as PointerOps>::Value> {
@@ -2367,7 +2394,11 @@ where
             self.tail = unsafe { prev(self.tree.adapter.link_ops(), tail) };
         }
         Some(unsafe {
-            &mut *(self.tree.adapter.get_value(tail) as *mut <A::PointerOps as PointerOps>::Value)
+            &mut *self
+                .tree
+                .adapter
+                .pointer_ops()
+                .get_mut(self.tree.adapter.get_value(tail))
         })
     }
 }
