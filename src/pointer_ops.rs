@@ -206,6 +206,7 @@ unsafe impl<T: ?Sized> PointerOps for DefaultPointerOps<Box<T>> {
     }
 }
 
+#[cfg(feature = "alloc")]
 unsafe impl<T: ?Sized> ExclusivePointerOps for DefaultPointerOps<Box<T>> {}
 
 #[cfg(feature = "alloc")]
@@ -224,6 +225,7 @@ unsafe impl<T: ?Sized> PointerOps for DefaultPointerOps<Pin<Box<T>>> {
     }
 }
 
+#[cfg(feature = "alloc")]
 unsafe impl<T: ?Sized> ExclusivePointerOps for DefaultPointerOps<Pin<Box<T>>> {}
 
 #[cfg(feature = "alloc")]
@@ -242,6 +244,7 @@ unsafe impl<T: ?Sized> PointerOps for DefaultPointerOps<Rc<T>> {
     }
 }
 
+#[cfg(feature = "alloc")]
 unsafe impl<T: ?Sized> TryExclusivePointerOps for DefaultPointerOps<Rc<T>> {
     #[inline]
     unsafe fn try_get_mut(&self, value: *const Self::Value) -> Option<*mut Self::Value> {
@@ -268,6 +271,7 @@ unsafe impl<T: ?Sized> PointerOps for DefaultPointerOps<Pin<Rc<T>>> {
     }
 }
 
+#[cfg(feature = "alloc")]
 unsafe impl<T: ?Sized> TryExclusivePointerOps for DefaultPointerOps<Pin<Rc<T>>> {
     #[inline]
     unsafe fn try_get_mut(&self, value: *const Self::Value) -> Option<*mut Self::Value> {
@@ -294,6 +298,7 @@ unsafe impl<T: ?Sized> PointerOps for DefaultPointerOps<Arc<T>> {
     }
 }
 
+#[cfg(feature = "alloc")]
 unsafe impl<T: ?Sized> TryExclusivePointerOps for DefaultPointerOps<Arc<T>> {
     #[inline]
     unsafe fn try_get_mut(&self, value: *const Self::Value) -> Option<*mut Self::Value> {
@@ -320,6 +325,7 @@ unsafe impl<T: ?Sized> PointerOps for DefaultPointerOps<Pin<Arc<T>>> {
     }
 }
 
+#[cfg(feature = "alloc")]
 unsafe impl<T: ?Sized> TryExclusivePointerOps for DefaultPointerOps<Pin<Arc<T>>> {
     #[inline]
     unsafe fn try_get_mut(&self, value: *const Self::Value) -> Option<*mut Self::Value> {
