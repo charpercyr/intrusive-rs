@@ -250,7 +250,7 @@ unsafe impl<T: ?Sized> TryExclusivePointerOps for DefaultPointerOps<Rc<T>> {
     unsafe fn try_get_mut(&self, value: *const Self::Value) -> Option<*mut Self::Value> {
         let mut rc = Rc::from_raw(value);
         let ptr = Rc::get_mut(&mut rc).map(|ptr| ptr as *mut Self::Value);
-        drop(Rc::into_raw(rc));
+        Rc::into_raw(rc);
         ptr
     }
 }
@@ -277,7 +277,7 @@ unsafe impl<T: ?Sized> TryExclusivePointerOps for DefaultPointerOps<Pin<Rc<T>>> 
     unsafe fn try_get_mut(&self, value: *const Self::Value) -> Option<*mut Self::Value> {
         let mut rc = Rc::from_raw(value);
         let ptr = Rc::get_mut(&mut rc).map(|ptr| ptr as *mut Self::Value);
-        drop(Rc::into_raw(rc));
+        Rc::into_raw(rc);
         ptr
     }
 }
@@ -304,7 +304,7 @@ unsafe impl<T: ?Sized> TryExclusivePointerOps for DefaultPointerOps<Arc<T>> {
     unsafe fn try_get_mut(&self, value: *const Self::Value) -> Option<*mut Self::Value> {
         let mut arc = Arc::from_raw(value);
         let ptr = Arc::get_mut(&mut arc).map(|ptr| ptr as *mut Self::Value);
-        drop(Arc::into_raw(arc));
+        let _ = Arc::into_raw(arc);
         ptr
     }
 }
@@ -331,7 +331,7 @@ unsafe impl<T: ?Sized> TryExclusivePointerOps for DefaultPointerOps<Pin<Arc<T>>>
     unsafe fn try_get_mut(&self, value: *const Self::Value) -> Option<*mut Self::Value> {
         let mut arc = Arc::from_raw(value);
         let ptr = Arc::get_mut(&mut arc).map(|ptr| ptr as *mut Self::Value);
-        drop(Arc::into_raw(arc));
+        let _ = Arc::into_raw(arc);
         ptr
     }
 }
