@@ -22,12 +22,14 @@ use crate::link_ops::{self, DefaultLinkOps};
 use crate::linked_list::LinkedListOps;
 use crate::pointer_ops::PointerOps;
 use crate::singly_linked_list::SinglyLinkedListOps;
-use crate::unchecked_option::UncheckedOptionExt;
 use crate::xor_linked_list::XorLinkedListOps;
 use crate::Adapter;
 use crate::ExclusivePointerOps;
 use crate::KeyAdapter;
 use crate::TryExclusivePointerOps;
+// Necessary for Rust 1.56 compatability
+#[allow(unused_imports)]
+use crate::unchecked_option::UncheckedOptionExt;
 
 // =============================================================================
 // RBTreeOps
@@ -1039,7 +1041,7 @@ unsafe fn remove<T: RBTreeOps>(link_ops: &mut T, ptr: T::LinkPtr, root: &mut Opt
 }
 
 // =============================================================================
-// Cursor, CursorMut
+// Cursor, CursorMut, CursorOwning
 // =============================================================================
 
 /// A cursor which provides read-only access to a `RBTree`.
@@ -1094,7 +1096,7 @@ where
     where
         <A::PointerOps as PointerOps>::Pointer: Clone,
     {
-        let raw_pointer = self.get()? as *const <A::PointerOps as PointerOps>::Value;
+        let raw_pointer = unsafe { self.tree.adapter.get_value(self.current?) };
         Some(unsafe {
             crate::pointer_ops::clone_pointer_from_raw(self.tree.adapter.pointer_ops(), raw_pointer)
         })
@@ -1497,6 +1499,61 @@ where
     }
 }
 
+/// A cursor with ownership over the `RBTree` it points into.
+pub struct CursorOwning<A: Adapter>
+where
+    A::LinkOps: RBTreeOps,
+{
+    current: Option<<A::LinkOps as link_ops::LinkOps>::LinkPtr>,
+    tree: RBTree<A>,
+}
+
+impl<A: Adapter> CursorOwning<A>
+where
+    A::LinkOps: RBTreeOps,
+{
+    /// Consumes self and returns the inner `RBTree`.
+    #[inline]
+    pub fn into_inner(self) -> RBTree<A> {
+        self.tree
+    }
+
+    /// Returns a read-only cursor pointing to the current element.
+    ///
+    /// The lifetime of the returned `Cursor` is bound to that of the
+    /// `CursorOwning`, which means it cannot outlive the `CursorOwning` and that the
+    /// `CursorOwning` is frozen for the lifetime of the `Cursor`.
+    ///
+    /// Mutations of the returned cursor are _not_ reflected in the original.
+    #[inline]
+    pub fn as_cursor(&self) -> Cursor<'_, A> {
+        Cursor {
+            current: self.current,
+            tree: &self.tree,
+        }
+    }
+
+    /// Perform action with mutable reference to the cursor.
+    ///
+    /// All mutations of the cursor are reflected in the original.
+    #[inline]
+    pub fn with_cursor_mut<T>(&mut self, f: impl FnOnce(&mut CursorMut<'_, A>) -> T) -> T {
+        let mut cursor = CursorMut {
+            current: self.current,
+            tree: &mut self.tree,
+        };
+        let ret = f(&mut cursor);
+        self.current = cursor.current;
+        ret
+    }
+}
+unsafe impl<A: Adapter> Send for CursorOwning<A>
+where
+    RBTree<A>: Send,
+    A::LinkOps: RBTreeOps,
+{
+}
+
 // =============================================================================
 // RBTree
 // =============================================================================
@@ -1590,6 +1647,15 @@ where
         }
     }
 
+    /// Returns a null `CursorOwning` for this tree.
+    #[inline]
+    pub fn cursor_owning(self) -> CursorOwning<A> {
+        CursorOwning {
+            current: None,
+            tree: self,
+        }
+    }
+
     /// Creates a `Cursor` from a pointer to an element.
     ///
     /// # Safety
@@ -1622,6 +1688,22 @@ where
         }
     }
 
+    /// Creates a `CursorOwning` from a pointer to an element.
+    ///
+    /// # Safety
+    ///
+    /// `ptr` must be a pointer to an object that is part of this tree.
+    #[inline]
+    pub unsafe fn cursor_owning_from_ptr(
+        self,
+        ptr: *const <A::PointerOps as PointerOps>::Value,
+    ) -> CursorOwning<A> {
+        CursorOwning {
+            current: Some(self.adapter.get_link(ptr)),
+            tree: self,
+        }
+    }
+
     /// Returns a `Cursor` pointing to the first element of the tree. If the
     /// tree is empty then a null cursor is returned.
     #[inline]
@@ -1640,6 +1722,15 @@ where
         cursor
     }
 
+    /// Returns a `CursorOwning` pointing to the first element of the tree. If the
+    /// the tree is empty then a null cursor is returned.
+    #[inline]
+    pub fn front_owning(self) -> CursorOwning<A> {
+        let mut cursor = self.cursor_owning();
+        cursor.with_cursor_mut(|c| c.move_next());
+        cursor
+    }
+
     /// Returns a `Cursor` pointing to the last element of the tree. If the tree
     /// is empty then a null cursor is returned.
     #[inline]
@@ -1655,6 +1746,15 @@ where
     pub fn back_mut(&mut self) -> CursorMut<'_, A> {
         let mut cursor = self.cursor_mut();
         cursor.move_prev();
+        cursor
+    }
+
+    /// Returns a `CursorOwning` pointing to the last element of the tree. If the
+    /// tree is empty then a null cursor is returned.
+    #[inline]
+    pub fn back_owning(self) -> CursorOwning<A> {
+        let mut cursor = self.cursor_owning();
+        cursor.with_cursor_mut(|c| c.move_prev());
         cursor
     }
 
@@ -1833,6 +1933,23 @@ where
         }
     }
 
+    // Returns a `CursorOwning` pointing to an element with the given key. If no
+    /// such element is found then a null cursor is returned.
+    ///
+    /// If multiple elements with an identical key are found then an arbitrary
+    /// one is returned.
+    #[inline]
+    pub fn find_owning<'a, Q: ?Sized + Ord>(self, key: &Q) -> CursorOwning<A>
+    where
+        <A as KeyAdapter<'a>>::Key: Borrow<Q>,
+        Self: 'a,
+    {
+        CursorOwning {
+            current: self.find_internal(key),
+            tree: self,
+        }
+    }
+
     #[inline]
     fn lower_bound_internal<'a, Q: ?Sized + Ord>(
         &self,
@@ -1891,6 +2008,21 @@ where
         'a: 'b,
     {
         CursorMut {
+            current: self.lower_bound_internal(bound),
+            tree: self,
+        }
+    }
+
+    /// Returns a `CursorOwning` pointing to the first element whose key is
+    /// above the given bound. If no such element is found then a null
+    /// cursor is returned.
+    #[inline]
+    pub fn lower_bound_owning<'a, Q: ?Sized + Ord>(self, bound: Bound<&Q>) -> CursorOwning<A>
+    where
+        <A as KeyAdapter<'a>>::Key: Borrow<Q>,
+        Self: 'a,
+    {
+        CursorOwning {
             current: self.lower_bound_internal(bound),
             tree: self,
         }
@@ -1959,6 +2091,21 @@ where
         }
     }
 
+    /// Returns a `CursorOwning` pointing to the last element whose key is
+    /// below the given bound. If no such element is found then a null
+    /// cursor is returned.
+    #[inline]
+    pub fn upper_bound_owning<'a, Q: ?Sized + Ord>(self, bound: Bound<&Q>) -> CursorOwning<A>
+    where
+        <A as KeyAdapter<'a>>::Key: Borrow<Q>,
+        Self: 'a,
+    {
+        CursorOwning {
+            current: self.upper_bound_internal(bound),
+            tree: self,
+        }
+    }
+
     /// Inserts a new element into the `RBTree`.
     ///
     /// The new element will be inserted at the correct position in the tree
@@ -2002,6 +2149,7 @@ where
             } else {
                 self.insert_root(new);
             }
+
             CursorMut {
                 current: Some(new),
                 tree: self,
@@ -2522,8 +2670,9 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::{Entry, KeyAdapter, Link, PointerOps, RBTree};
-    use crate::Bound::*;
+    use super::{CursorOwning, Entry, KeyAdapter, Link, PointerOps, RBTree};
+    use crate::{Bound::*, UnsafeRef};
+    use alloc::boxed::Box;
     use rand::prelude::*;
     use rand_xorshift::XorShiftRng;
     use std::fmt;
@@ -2541,27 +2690,42 @@ mod tests {
             write!(f, "{}", self.value)
         }
     }
-    intrusive_adapter!(ObjAdapter = Rc<Obj>: Obj { link: Link });
-    impl<'a> KeyAdapter<'a> for ObjAdapter {
+    intrusive_adapter!(RcObjAdapter = Rc<Obj>: Obj { link: Link });
+
+    impl<'a> KeyAdapter<'a> for RcObjAdapter {
         type Key = i32;
         fn get_key(&self, value: &'a <Self::PointerOps as PointerOps>::Value) -> i32 {
             value.value
         }
     }
-    fn make_obj(value: i32) -> Rc<Obj> {
-        Rc::new(Obj {
+
+    intrusive_adapter!(UnsafeRefObjAdapter = UnsafeRef<Obj>: Obj { link: Link });
+
+    impl<'a> KeyAdapter<'a> for UnsafeRefObjAdapter {
+        type Key = i32;
+        fn get_key(&self, value: &'a <Self::PointerOps as PointerOps>::Value) -> i32 {
+            value.value
+        }
+    }
+
+    fn make_rc_obj(value: i32) -> Rc<Obj> {
+        Rc::new(make_obj(value))
+    }
+
+    fn make_obj(value: i32) -> Obj {
+        Obj {
             link: Link::new(),
             value,
-        })
+        }
     }
 
     #[test]
     fn test_link() {
-        let a = make_obj(1);
+        let a = make_rc_obj(1);
         assert!(!a.link.is_linked());
         assert_eq!(format!("{:?}", a.link), "unlinked");
 
-        let mut b = RBTree::<ObjAdapter>::default();
+        let mut b = RBTree::<RcObjAdapter>::default();
         assert!(b.is_empty());
 
         assert_eq!(b.insert(a.clone()).get().unwrap().value, 1);
@@ -2587,10 +2751,10 @@ mod tests {
 
     #[test]
     fn test_cursor() {
-        let a = make_obj(1);
-        let b = make_obj(2);
-        let c = make_obj(3);
-        let mut t = RBTree::new(ObjAdapter::new());
+        let a = make_rc_obj(1);
+        let b = make_rc_obj(2);
+        let c = make_rc_obj(3);
+        let mut t = RBTree::new(RcObjAdapter::new());
         let mut cur = t.cursor_mut();
         assert!(cur.is_null());
         assert!(cur.get().is_none());
@@ -2628,9 +2792,9 @@ mod tests {
         }
         assert_eq!(cur.get().unwrap() as *const _, a.as_ref() as *const _);
 
-        let a2 = make_obj(1);
-        let b2 = make_obj(2);
-        let c2 = make_obj(3);
+        let a2 = make_rc_obj(1);
+        let b2 = make_rc_obj(2);
+        let c2 = make_rc_obj(3);
         assert_eq!(
             cur.replace_with(a2).unwrap().as_ref() as *const _,
             a.as_ref() as *const _
@@ -2655,12 +2819,41 @@ mod tests {
         );
     }
 
-    #[cfg(not(miri))]
+    #[test]
+    fn test_cursor_owning() {
+        struct Container {
+            cur: CursorOwning<RcObjAdapter>,
+        }
+
+        let mut t = RBTree::new(RcObjAdapter::new());
+        t.insert(make_rc_obj(1));
+        t.insert(make_rc_obj(2));
+        t.insert(make_rc_obj(3));
+        t.insert(make_rc_obj(4));
+        let mut con = Container {
+            cur: t.cursor_owning(),
+        };
+        assert!(con.cur.as_cursor().is_null());
+
+        con.cur = con.cur.into_inner().front_owning();
+        assert_eq!(con.cur.as_cursor().get().unwrap().value, 1);
+
+        con.cur = con.cur.into_inner().back_owning();
+        assert_eq!(con.cur.as_cursor().get().unwrap().value, 4);
+
+        con.cur = con.cur.into_inner().find_owning(&2);
+        assert_eq!(con.cur.as_cursor().get().unwrap().value, 2);
+
+        con.cur.with_cursor_mut(|c| c.move_next());
+        assert_eq!(con.cur.as_cursor().get().unwrap().value, 3);
+    }
+
     #[test]
     fn test_insert_remove() {
-        let v = (0..100).map(make_obj).collect::<Vec<_>>();
+        let len = if cfg!(miri) { 10 } else { 100 };
+        let v = (0..len).map(make_rc_obj).collect::<Vec<_>>();
         assert!(v.iter().all(|x| !x.link.is_linked()));
-        let mut t = RBTree::new(ObjAdapter::new());
+        let mut t = RBTree::new(RcObjAdapter::new());
         assert!(t.is_empty());
         let mut rng = XorShiftRng::seed_from_u64(0);
 
@@ -2775,11 +2968,10 @@ mod tests {
         }
     }
 
-    #[cfg(not(miri))]
     #[test]
     fn test_iter() {
-        let v = (0..10).map(|x| make_obj(x * 10)).collect::<Vec<_>>();
-        let mut t = RBTree::new(ObjAdapter::new());
+        let v = (0..10).map(|x| make_rc_obj(x * 10)).collect::<Vec<_>>();
+        let mut t = RBTree::new(RcObjAdapter::new());
         for x in v.iter() {
             t.insert(x.clone());
         }
@@ -3024,8 +3216,8 @@ mod tests {
 
     #[test]
     fn test_find() {
-        let v = (0..10).map(|x| make_obj(x * 10)).collect::<Vec<_>>();
-        let mut t = RBTree::new(ObjAdapter::new());
+        let v = (0..10).map(|x| make_rc_obj(x * 10)).collect::<Vec<_>>();
+        let mut t = RBTree::new(RcObjAdapter::new());
         for x in v.iter() {
             t.insert(x.clone());
         }
@@ -3152,40 +3344,50 @@ mod tests {
     }
 
     #[test]
-    fn test_fast_clear() {
-        let mut t = RBTree::new(ObjAdapter::new());
-        let a = make_obj(1);
-        let b = make_obj(2);
-        let c = make_obj(3);
+    fn test_fast_clear_force_unlink() {
+        let mut t = RBTree::new(UnsafeRefObjAdapter::new());
+        let a = UnsafeRef::from_box(Box::new(make_obj(1)));
+        let b = UnsafeRef::from_box(Box::new(make_obj(2)));
+        let c = UnsafeRef::from_box(Box::new(make_obj(3)));
         t.insert(a.clone());
         t.insert(b.clone());
         t.insert(c.clone());
 
         t.fast_clear();
         assert!(t.is_empty());
-        assert!(a.link.is_linked());
-        assert!(b.link.is_linked());
-        assert!(c.link.is_linked());
+
         unsafe {
+            assert!(a.link.is_linked());
+            assert!(b.link.is_linked());
+            assert!(c.link.is_linked());
+
             a.link.force_unlink();
             b.link.force_unlink();
             c.link.force_unlink();
+
+            assert!(t.is_empty());
+
+            assert!(!a.link.is_linked());
+            assert!(!b.link.is_linked());
+            assert!(!c.link.is_linked());
         }
-        assert!(t.is_empty());
-        assert!(!a.link.is_linked());
-        assert!(!b.link.is_linked());
-        assert!(!c.link.is_linked());
+
+        unsafe {
+            UnsafeRef::into_box(a);
+            UnsafeRef::into_box(b);
+            UnsafeRef::into_box(c);
+        }
     }
 
     #[test]
     fn test_entry() {
-        let mut t = RBTree::new(ObjAdapter::new());
-        let a = make_obj(1);
-        let b = make_obj(2);
-        let c = make_obj(3);
-        let d = make_obj(4);
-        let e = make_obj(5);
-        let f = make_obj(6);
+        let mut t = RBTree::new(RcObjAdapter::new());
+        let a = make_rc_obj(1);
+        let b = make_rc_obj(2);
+        let c = make_rc_obj(3);
+        let d = make_rc_obj(4);
+        let e = make_rc_obj(5);
+        let f = make_rc_obj(6);
         t.entry(&3).or_insert(c);
         t.entry(&2).or_insert(b.clone());
         t.entry(&1).or_insert(a);
@@ -3229,8 +3431,8 @@ mod tests {
             link: Link,
             value: &'a T,
         }
-        intrusive_adapter!(ObjAdapter<'a, T> = &'a Obj<'a, T>: Obj<'a, T> {link: Link} where T: 'a);
-        impl<'a, 'b, T: 'a + 'b> KeyAdapter<'a> for ObjAdapter<'b, T> {
+        intrusive_adapter!(RcObjAdapter<'a, T> = &'a Obj<'a, T>: Obj<'a, T> {link: Link} where T: 'a);
+        impl<'a, 'b, T: 'a + 'b> KeyAdapter<'a> for RcObjAdapter<'b, T> {
             type Key = &'a T;
             fn get_key(&self, value: &'a Obj<'b, T>) -> &'a T {
                 value.value
@@ -3243,7 +3445,7 @@ mod tests {
             value: &v,
         };
         let b = a.clone();
-        let mut l = RBTree::new(ObjAdapter::new());
+        let mut l = RBTree::new(RcObjAdapter::new());
         l.insert(&a);
         l.insert(&b);
         assert_eq!(*l.front().get().unwrap().value, 5);
@@ -3259,8 +3461,8 @@ mod tests {
                 link: Link,
                 value: usize,
             }
-            intrusive_adapter!(ObjAdapter = $ptr<Obj>: Obj { link: Link });
-            impl<'a> KeyAdapter<'a> for ObjAdapter {
+            intrusive_adapter!(RcObjAdapter = $ptr<Obj>: Obj { link: Link });
+            impl<'a> KeyAdapter<'a> for RcObjAdapter {
                 type Key = usize;
                 fn get_key(&self, value: &'a Obj) -> usize {
                     value.value
@@ -3271,7 +3473,7 @@ mod tests {
                 link: Link::new(),
                 value: 5,
             });
-            let mut l = RBTree::new(ObjAdapter::new());
+            let mut l = RBTree::new(RcObjAdapter::new());
             l.insert(a.clone());
             assert_eq!(2, $ptr::strong_count(&a));
 

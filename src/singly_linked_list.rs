@@ -497,7 +497,7 @@ unsafe fn splice<T: SinglyLinkedListOps>(
 }
 
 // =============================================================================
-// Cursor, CursorMut
+// Cursor, CursorMut, CursorOwning
 // =============================================================================
 
 /// A cursor which provides read-only access to a `SinglyLinkedList`.
@@ -552,7 +552,7 @@ where
     where
         <A::PointerOps as PointerOps>::Pointer: Clone,
     {
-        let raw_pointer = self.get()? as *const <A::PointerOps as PointerOps>::Value;
+        let raw_pointer = unsafe { self.list.adapter.get_value(self.current?) };
         Some(unsafe {
             crate::pointer_ops::clone_pointer_from_raw(self.list.adapter.pointer_ops(), raw_pointer)
         })
@@ -886,6 +886,61 @@ where
     }
 }
 
+/// A cursor with ownership over the `SinglyLinkedList` it points into.
+pub struct CursorOwning<A: Adapter>
+where
+    A::LinkOps: SinglyLinkedListOps,
+{
+    current: Option<<A::LinkOps as link_ops::LinkOps>::LinkPtr>,
+    list: SinglyLinkedList<A>,
+}
+
+impl<A: Adapter> CursorOwning<A>
+where
+    A::LinkOps: SinglyLinkedListOps,
+{
+    /// Consumes self and returns the inner `SinglyLinkedList`.
+    #[inline]
+    pub fn into_inner(self) -> SinglyLinkedList<A> {
+        self.list
+    }
+
+    /// Returns a read-only cursor pointing to the current element.
+    ///
+    /// The lifetime of the returned `Cursor` is bound to that of the
+    /// `CursorOwning`, which means it cannot outlive the `CursorOwning` and that the
+    /// `CursorOwning` is frozen for the lifetime of the `Cursor`.
+    ///
+    /// Mutations of the returned cursor are _not_ reflected in the original.
+    #[inline]
+    pub fn as_cursor(&self) -> Cursor<'_, A> {
+        Cursor {
+            current: self.current,
+            list: &self.list,
+        }
+    }
+
+    /// Perform action with mutable reference to the cursor.
+    ///
+    /// All mutations of the cursor are reflected in the original.
+    #[inline]
+    pub fn with_cursor_mut<T>(&mut self, f: impl FnOnce(&mut CursorMut<'_, A>) -> T) -> T {
+        let mut cursor = CursorMut {
+            current: self.current,
+            list: &mut self.list,
+        };
+        let ret = f(&mut cursor);
+        self.current = cursor.current;
+        ret
+    }
+}
+unsafe impl<A: Adapter> Send for CursorOwning<A>
+where
+    SinglyLinkedList<A>: Send,
+    A::LinkOps: SinglyLinkedListOps,
+{
+}
+
 // =============================================================================
 // SinglyLinkedList
 // =============================================================================
@@ -972,6 +1027,15 @@ where
         }
     }
 
+    /// Returns a null `CursorOwning` for this list.
+    #[inline]
+    pub fn cursor_owning(self) -> CursorOwning<A> {
+        CursorOwning {
+            current: None,
+            list: self,
+        }
+    }
+
     /// Creates a `Cursor` from a pointer to an element.
     ///
     /// # Safety
@@ -1004,6 +1068,22 @@ where
         }
     }
 
+    /// Creates a `CursorOwning` from a pointer to an element.
+    ///
+    /// # Safety
+    ///
+    /// `ptr` must be a pointer to an object that is part of this list.
+    #[inline]
+    pub unsafe fn cursor_owning_from_ptr(
+        self,
+        ptr: *const <A::PointerOps as PointerOps>::Value,
+    ) -> CursorOwning<A> {
+        CursorOwning {
+            current: Some(self.adapter.get_link(ptr)),
+            list: self,
+        }
+    }
+
     /// Returns a `Cursor` pointing to the first element of the list. If the
     /// list is empty then a null cursor is returned.
     #[inline]
@@ -1019,6 +1099,15 @@ where
     pub fn front_mut(&mut self) -> CursorMut<'_, A> {
         let mut cursor = self.cursor_mut();
         cursor.move_next();
+        cursor
+    }
+
+    /// Returns a `CursorOwning` pointing to the first element of the list. If the
+    /// the list is empty then a null cursor is returned.
+    #[inline]
+    pub fn front_owning(self) -> CursorOwning<A> {
+        let mut cursor = self.cursor_owning();
+        cursor.with_cursor_mut(|c| c.move_next());
         cursor
     }
 
@@ -1287,7 +1376,11 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::{Link, SinglyLinkedList};
+    use alloc::boxed::Box;
+
+    use crate::UnsafeRef;
+
+    use super::{CursorOwning, Link, SinglyLinkedList};
     use std::fmt;
     use std::format;
     use std::rc::Rc;
@@ -1303,23 +1396,28 @@ mod tests {
             write!(f, "{}", self.value)
         }
     }
-    intrusive_adapter!(ObjAdapter1 = Rc<Obj>: Obj { link1: Link });
-    intrusive_adapter!(ObjAdapter2 = Rc<Obj>: Obj { link2: Link });
-    fn make_obj(value: u32) -> Rc<Obj> {
-        Rc::new(Obj {
+    intrusive_adapter!(RcObjAdapter1 = Rc<Obj>: Obj { link1: Link });
+    intrusive_adapter!(RcObjAdapter2 = Rc<Obj>: Obj { link2: Link });
+    intrusive_adapter!(UnsafeRefObjAdapter1 = UnsafeRef<Obj>: Obj { link1: Link });
+
+    fn make_rc_obj(value: u32) -> Rc<Obj> {
+        Rc::new(make_obj(value))
+    }
+    fn make_obj(value: u32) -> Obj {
+        Obj {
             link1: Link::new(),
             link2: Link::default(),
             value,
-        })
+        }
     }
 
     #[test]
     fn test_link() {
-        let a = make_obj(1);
+        let a = make_rc_obj(1);
         assert!(!a.link1.is_linked());
         assert!(!a.link2.is_linked());
 
-        let mut b = SinglyLinkedList::<ObjAdapter1>::default();
+        let mut b = SinglyLinkedList::<RcObjAdapter1>::default();
         assert!(b.is_empty());
 
         b.push_front(a.clone());
@@ -1340,11 +1438,11 @@ mod tests {
 
     #[test]
     fn test_cursor() {
-        let a = make_obj(1);
-        let b = make_obj(2);
-        let c = make_obj(3);
+        let a = make_rc_obj(1);
+        let b = make_rc_obj(2);
+        let c = make_rc_obj(3);
 
-        let mut l = SinglyLinkedList::new(ObjAdapter1::new());
+        let mut l = SinglyLinkedList::new(RcObjAdapter1::new());
         let mut cur = l.cursor_mut();
         assert!(cur.is_null());
         assert!(cur.get().is_none());
@@ -1420,15 +1518,38 @@ mod tests {
     }
 
     #[test]
-    fn test_split_splice() {
-        let mut l1 = SinglyLinkedList::new(ObjAdapter1::new());
-        let mut l2 = SinglyLinkedList::new(ObjAdapter1::new());
-        let mut l3 = SinglyLinkedList::new(ObjAdapter1::new());
+    fn test_cursor_owning() {
+        struct Container {
+            cur: CursorOwning<RcObjAdapter1>,
+        }
 
-        let a = make_obj(1);
-        let b = make_obj(2);
-        let c = make_obj(3);
-        let d = make_obj(4);
+        let mut l = SinglyLinkedList::new(RcObjAdapter1::new());
+        l.push_front(make_rc_obj(1));
+        l.push_front(make_rc_obj(2));
+        l.push_front(make_rc_obj(3));
+        l.push_front(make_rc_obj(4));
+        let mut con = Container {
+            cur: l.cursor_owning(),
+        };
+        assert!(con.cur.as_cursor().is_null());
+
+        con.cur = con.cur.into_inner().front_owning();
+        assert_eq!(con.cur.as_cursor().get().unwrap().value, 4);
+
+        con.cur.with_cursor_mut(|c| c.move_next());
+        assert_eq!(con.cur.as_cursor().get().unwrap().value, 3);
+    }
+
+    #[test]
+    fn test_split_splice() {
+        let mut l1 = SinglyLinkedList::new(RcObjAdapter1::new());
+        let mut l2 = SinglyLinkedList::new(RcObjAdapter1::new());
+        let mut l3 = SinglyLinkedList::new(RcObjAdapter1::new());
+
+        let a = make_rc_obj(1);
+        let b = make_rc_obj(2);
+        let c = make_rc_obj(3);
+        let d = make_rc_obj(4);
         l1.cursor_mut().insert_after(d);
         l1.cursor_mut().insert_after(c);
         l1.cursor_mut().insert_after(b);
@@ -1514,11 +1635,11 @@ mod tests {
 
     #[test]
     fn test_iter() {
-        let mut l = SinglyLinkedList::new(ObjAdapter1::new());
-        let a = make_obj(1);
-        let b = make_obj(2);
-        let c = make_obj(3);
-        let d = make_obj(4);
+        let mut l = SinglyLinkedList::new(RcObjAdapter1::new());
+        let a = make_rc_obj(1);
+        let b = make_rc_obj(2);
+        let c = make_rc_obj(3);
+        let d = make_rc_obj(4);
         l.cursor_mut().insert_after(d.clone());
         l.cursor_mut().insert_after(c.clone());
         l.cursor_mut().insert_after(b.clone());
@@ -1568,12 +1689,12 @@ mod tests {
 
     #[test]
     fn test_multi_list() {
-        let mut l1 = SinglyLinkedList::new(ObjAdapter1::new());
-        let mut l2 = SinglyLinkedList::new(ObjAdapter2::new());
-        let a = make_obj(1);
-        let b = make_obj(2);
-        let c = make_obj(3);
-        let d = make_obj(4);
+        let mut l1 = SinglyLinkedList::new(RcObjAdapter1::new());
+        let mut l2 = SinglyLinkedList::new(RcObjAdapter2::new());
+        let a = make_rc_obj(1);
+        let b = make_rc_obj(2);
+        let c = make_rc_obj(3);
+        let d = make_rc_obj(4);
         l1.cursor_mut().insert_after(d.clone());
         l1.cursor_mut().insert_after(c.clone());
         l1.cursor_mut().insert_after(b.clone());
@@ -1587,29 +1708,39 @@ mod tests {
     }
 
     #[test]
-    fn test_fast_clear() {
-        let mut l = SinglyLinkedList::new(ObjAdapter1::new());
-        let a = make_obj(1);
-        let b = make_obj(2);
-        let c = make_obj(3);
+    fn test_fast_clear_force_unlink() {
+        let mut l = SinglyLinkedList::new(UnsafeRefObjAdapter1::new());
+        let a = UnsafeRef::from_box(Box::new(make_obj(1)));
+        let b = UnsafeRef::from_box(Box::new(make_obj(2)));
+        let c = UnsafeRef::from_box(Box::new(make_obj(3)));
         l.cursor_mut().insert_after(a.clone());
         l.cursor_mut().insert_after(b.clone());
         l.cursor_mut().insert_after(c.clone());
 
         l.fast_clear();
         assert!(l.is_empty());
-        assert!(a.link1.is_linked());
-        assert!(b.link1.is_linked());
-        assert!(c.link1.is_linked());
+
         unsafe {
+            assert!(a.link1.is_linked());
+            assert!(b.link1.is_linked());
+            assert!(c.link1.is_linked());
+
             a.link1.force_unlink();
             b.link1.force_unlink();
             c.link1.force_unlink();
+
+            assert!(l.is_empty());
+
+            assert!(!a.link1.is_linked());
+            assert!(!b.link1.is_linked());
+            assert!(!c.link1.is_linked());
         }
-        assert!(l.is_empty());
-        assert!(!a.link1.is_linked());
-        assert!(!b.link1.is_linked());
-        assert!(!c.link1.is_linked());
+
+        unsafe {
+            UnsafeRef::into_box(a);
+            UnsafeRef::into_box(b);
+            UnsafeRef::into_box(c);
+        }
     }
 
     #[test]
